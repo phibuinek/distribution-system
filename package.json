@@ -1,0 +1,22 @@
+{
+  "name": "distributionsystem",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run -ws dev",
+    "dev:server": "npm run -w @ds/server dev",
+    "dev:web": "npm run -w @ds/web dev",
+    "build": "npm run -ws build",
+    "lint": "npm run -ws lint"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {},
+  "devDependencies": {}
+}
