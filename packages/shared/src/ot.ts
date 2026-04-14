@@ -1,5 +1,52 @@
 import type { TextOp } from "./types";
 
+/**
+ * Operational Transformation (OT) engine for concurrent text editing.
+ *
+ * ## Conflict Resolution Rules
+ *
+ * Every operation carries a `baseRev` — the server revision it was produced
+ * against.  When two clients produce operations concurrently (same baseRev),
+ * the server rebases the later-arriving operation against every op committed
+ * since that baseRev using `transformAgainst`.  The rules below are applied
+ * deterministically so every client converges to the same final text regardless
+ * of network arrival order.
+ *
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │  a \ b        │ ins(b)                        │ del(b)                  │
+ * ├───────────────┼──────────────────────────────┼─────────────────────────┤
+ * │ ins(a)        │ pos < b.pos  → unchanged       │ pos ≤ b.pos → unchanged │
+ * │               │ pos > b.pos  → pos += b.len    │ pos ≥ b.end → pos -= b.len│
+ * │               │ pos = b.pos  → TIEBREAK (↓)    │ pos inside  → clamp to b.pos│
+ * ├───────────────┼──────────────────────────────┼─────────────────────────┤
+ * │ del(a)        │ a.pos ≥ b.pos → pos += b.len   │ entirely before → unchanged │
+ * │               │ a.pos < b.pos → unchanged      │ entirely after  → pos -= b.len│
+ * │               │                               │ overlapping     → shrink len │
+ * │               │                               │ fully covered   → noop (len=0)│
+ * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * ### Tiebreak rule (Insert vs Insert at the SAME position)
+ * When two inserts target the same position concurrently, we need a total
+ * ordering to guarantee convergence.  Rule:
+ *
+ *   The operation whose clientId sorts lexicographically SMALLER goes first.
+ *   On equal clientId (same client, different ops), lower seq goes first.
+ *
+ * Example: clientA ("t_000…") inserts "anh" at pos 0,
+ *          clientB ("t_111…") inserts "khong biet" at pos 0 concurrently.
+ *   → clientA < clientB lexicographically, so A's insert lands at pos 0.
+ *   → B's insert is transformed to pos 3  ("anh".length).
+ *   → Final text: "anhkhong biet"  (deterministic on all clients).
+ *
+ * ### Offline reconnect merge
+ * When a client reconnects after being offline, it sends its queued ops with
+ * the original `baseRev` from when it went offline.  The server rebases those
+ * ops against every committed op since that baseRev — exactly the same OT
+ * transformation as for online concurrent edits.  The client must NOT rebase
+ * against the snapshot text it receives on reconnect; it must use its
+ * pre-offline base so the server can do the correct relative transformation.
+ */
+
 export function applyOp(text: string, op: TextOp): string {
   if (op.kind === "ins") {
     if (op.pos < 0 || op.pos > text.length) return text;

@@ -2,17 +2,14 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata = {
-  title: "Realtime Sync Editor",
-  description: "Distributed real-time collaborative editor (NestJS + NextJS)",
+  title: "Docs",
+  description: "Collaborative document editor",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <div className="container">{children}</div>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
-
