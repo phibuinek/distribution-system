@@ -11,12 +11,14 @@
     "dev:server": "npm run -w @ds/server dev",
     "dev:web": "npm run -w @ds/web dev",
     "build": "npm run -ws build",
-    "lint": "npm run -ws lint"
+    "lint": "npm run -ws lint",
+    "test": "npm run -w @ds/shared test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.0.0-rc.17"
+  }
 }

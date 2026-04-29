@@ -53,7 +53,32 @@ export class DocsService {
     return doc.ops.slice(rev); // ops indexed by [0..rev-1]
   }
 
+  private validateOp(op: TextOp): void {
+    if (!op || typeof op !== "object") throw new Error("op must be an object");
+    if (typeof op.id !== "string" || !op.id.trim()) throw new Error("op.id must be a non-empty string");
+    if (typeof op.clientId !== "string" || !op.clientId.trim()) throw new Error("op.clientId must be a non-empty string");
+    if (typeof op.seq !== "number" || !Number.isInteger(op.seq) || op.seq < 1)
+      throw new Error("op.seq must be a positive integer");
+    if (typeof op.docId !== "string" || !op.docId.trim()) throw new Error("op.docId must be a non-empty string");
+    if (typeof op.baseRev !== "number" || !Number.isInteger(op.baseRev) || op.baseRev < 0)
+      throw new Error("op.baseRev must be a non-negative integer");
+    if (op.kind !== "ins" && op.kind !== "del") throw new Error('op.kind must be "ins" or "del"');
+    if (typeof op.pos !== "number" || !Number.isInteger(op.pos) || op.pos < 0)
+      throw new Error("op.pos must be a non-negative integer");
+    if (op.kind === "ins") {
+      if (typeof op.text !== "string") throw new Error("op.text must be a string for insert ops");
+    } else {
+      if (typeof op.len !== "number" || !Number.isInteger(op.len) || op.len < 1)
+        throw new Error("op.len must be a positive integer for delete ops");
+    }
+    // Guard against op id injection: id must match clientId:seq pattern
+    const expectedId = `${op.clientId}:${op.seq}`;
+    if (op.id !== expectedId) throw new Error(`op.id "${op.id}" does not match expected "${expectedId}"`);
+  }
+
   applyClientOp(rawOp: TextOp): { newRev: Revision; rebasedOp?: TextOp; deduped?: boolean } {
+    this.validateOp(rawOp);
+
     const doc = this.getOrCreate(rawOp.docId);
 
     const prior = doc.applied.get(rawOp.id);
@@ -92,6 +117,16 @@ export class DocsService {
     }
 
     const nextText = applyOp(doc.text, safe);
+
+    // Invariant: for inserts text must grow, for deletes it must shrink or stay
+    // (stay is possible when safe.len was clamped to 0 above, but we caught noops already).
+    if (safe.kind === "ins" && nextText.length !== doc.text.length + safe.text.length) {
+      throw new Error(`Consistency violation after ins: expected len ${doc.text.length + safe.text.length}, got ${nextText.length}`);
+    }
+    if (safe.kind === "del" && nextText.length !== doc.text.length - safe.len) {
+      throw new Error(`Consistency violation after del: expected len ${doc.text.length - safe.len}, got ${nextText.length}`);
+    }
+
     doc.text = nextText;
     doc.ops.push(safe);
     doc.rev += 1;

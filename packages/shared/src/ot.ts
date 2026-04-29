@@ -17,13 +17,22 @@ import type { TextOp } from "./types";
  * ├───────────────┼──────────────────────────────┼─────────────────────────┤
  * │ ins(a)        │ pos < b.pos  → unchanged       │ pos ≤ b.pos → unchanged │
  * │               │ pos > b.pos  → pos += b.len    │ pos ≥ b.end → pos -= b.len│
- * │               │ pos = b.pos  → TIEBREAK (↓)    │ pos inside  → clamp to b.pos│
+ * │               │ pos = b.pos  → TIEBREAK (↓)    │ pos inside  → text=""  │
+ * │               │                               │   (delete wins; noop)   │
  * ├───────────────┼──────────────────────────────┼─────────────────────────┤
- * │ del(a)        │ a.pos ≥ b.pos → pos += b.len   │ entirely before → unchanged │
- * │               │ a.pos < b.pos → unchanged      │ entirely after  → pos -= b.len│
- * │               │                               │ overlapping     → shrink len │
- * │               │                               │ fully covered   → noop (len=0)│
+ * │ del(a)        │ b.pos ≤ a.pos → pos += b.len   │ entirely before → unchanged │
+ * │               │ b.pos ≥ a.end → unchanged      │ entirely after  → pos -= b.len│
+ * │               │ b.pos inside  → len += b.len   │ overlapping     → shrink len │
+ * │               │   (expand to cover insert)     │ fully covered   → noop (len=0)│
  * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * ### Delete wins (Insert inside Delete range)
+ * When an insert targets a position strictly inside a concurrent delete's range,
+ * we apply "delete wins" semantics to guarantee convergence:
+ *   - The delete expands its length to cover the inserted characters.
+ *   - The insert becomes a no-op (empty text).
+ * This is the only choice that produces identical final documents on all clients
+ * when using single contiguous text operations.
  *
  * ### Tiebreak rule (Insert vs Insert at the SAME position)
  * When two inserts target the same position concurrently, we need a total
@@ -84,14 +93,29 @@ export function transformAgainst(a: TextOp, b: TextOp, tieBreak: TieBreak = defa
     const bEnd = b.pos + b.len;
     if (a.pos <= bStart) return a;
     if (a.pos >= bEnd) return { ...a, pos: a.pos - b.len };
-    // inserting inside a deleted range: clamp to deletion start
-    return { ...a, pos: bStart };
+    // Inserting inside a deleted range: "delete wins".
+    // The delete will expand (see del vs ins below) to cover our text, so our
+    // insert must become a no-op to keep all clients convergent.
+    // Returning an empty-text insert is safe: applyOp ignores it and isNoop
+    // catches it so callers can drop it from queues.
+    return { ...a, pos: bStart, text: "" };
   }
 
   if (a.kind === "del" && b.kind === "ins") {
+    const aEnd = a.pos + a.len;
     const insLen = b.text.length;
-    if (a.pos >= b.pos) return { ...a, pos: a.pos + insLen };
-    return a;
+    if (b.pos <= a.pos) {
+      // Insert lands at or before our deletion start: shift the delete right.
+      return { ...a, pos: a.pos + insLen };
+    }
+    if (b.pos >= aEnd) {
+      // Insert lands at or after our deletion end: no change.
+      return a;
+    }
+    // Insert lands strictly inside our deletion range: "delete wins".
+    // Expand the delete to cover the newly inserted characters so that both
+    // clients produce the same document after transformation.
+    return { ...a, len: a.len + insLen };
   }
 
   if (a.kind !== "del" || b.kind !== "del") return a;
@@ -118,7 +142,9 @@ export function transformAgainst(a: TextOp, b: TextOp, tieBreak: TieBreak = defa
 }
 
 export function isNoop(op: TextOp): boolean {
-  return op.kind === "del" && op.len <= 0;
+  if (op.kind === "del") return op.len <= 0;
+  if (op.kind === "ins") return op.text.length === 0;
+  return false;
 }
 
 export function rebaseOp(op: TextOp, opsSinceBase: TextOp[]): TextOp {
